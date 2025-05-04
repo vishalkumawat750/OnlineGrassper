@@ -5,11 +5,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is alive!"
-
-def run():
-    app.run(host='0.0.0.0', port=10000)
+    return "Bot is running!"
 
 def keep_alive():
-    thread = threading.Thread(target=run)
-    thread.start()
+    threading.Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': 8080}).start()

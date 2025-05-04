@@ -1,126 +1,95 @@
 import os
-import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler,
+    ContextTypes, filters
 )
-from asyncio import Lock
-from telegram.ext import ApplicationBuilder
+from yt_dlp import YoutubeDL
+import logging
 
-BOT_TOKEN = '6007538473:AAGPWq9MJMwMtt7csnLpJgmDOq99rTDvBZE'  # 🔁 Replace with your actual bot token
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
+logging.basicConfig(level=logging.INFO)
 
-user_video_data = {}
-user_locks = {}  # Lock per user
+# Get available video formats
+def get_video_options(url):
+    try:
+        ydl_opts = {}
+        if os.path.exists("cookies.txt"):
+            ydl_opts['cookies'] = "cookies.txt"
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎥 Send a YouTube link to begin.")
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            formats = info.get("formats", [])
+            options = [
+                (f"{f['format_note']} - {f['ext']}", f['format_id'])
+                for f in formats if f.get("vcodec") != "none" and f.get("acodec") != "none"
+            ]
+            return options
+    except Exception as e:
+        logging.error(f"Error in get_video_options: {e}")
+        return None
 
-async def get_video_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
-    chat_id = update.effective_chat.id
+# Download video
+def download_video(url, format_id):
+    ydl_opts = {
+        "format": format_id,
+        "outtmpl": "downloads/%(title)s.%(ext)s"
+    }
+
+    if os.path.exists("cookies.txt"):
+        ydl_opts['cookies'] = "cookies.txt"
 
     try:
-        ydl_opts = {'outtmpl': 'downloads/%(title)s.%(ext)s', 'cookies': 'cookies.txt','quiet': True, 'skip_download': True}
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-
-        formats = [
-            f for f in info['formats']
-            if f.get('ext') == 'mp4' and f.get('acodec') != 'none' and f.get('vcodec') != 'none'
-        ]
-
-        if not formats:
-            await update.message.reply_text("❌ No valid MP4 formats found.")
-            return
-
-        video_options = {}
-        buttons = []
-
-        for f in formats:
-            res = f.get('format_note') or f.get('height')
-            size = f.get('filesize') or 0
-            size_mb = round(size / 1024 / 1024, 1) if size else '?'
-            label = f"{res} - {size_mb} MB"
-            itag = str(f['format_id'])
-            video_options[itag] = f
-            buttons.append([InlineKeyboardButton(label, callback_data=itag)])
-
-        user_video_data[chat_id] = {'url': url, 'formats': video_options}
-
-        await update.message.reply_text("📥 Choose video quality:", reply_markup=InlineKeyboardMarkup(buttons))
-
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            return ydl.prepare_filename(info)
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+        logging.error(f"Download error: {e}")
+        return None
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Handlers
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📥 Send me a YouTube link to download.")
+
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    context.user_data["video_url"] = url
+
+    options = get_video_options(url)
+    if not options:
+        await update.message.reply_text("❌ Couldn't get video info.")
+        return
+
+    buttons = [
+        [InlineKeyboardButton(text=label, callback_data=format_id)]
+        for label, format_id in options[:10]
+    ]
+    markup = InlineKeyboardMarkup(buttons)
+    await update.message.reply_text("Choose quality:", reply_markup=markup)
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    chat_id = query.message.chat.id
-    itag = query.data
+    format_id = query.data
+    url = context.user_data.get("video_url")
 
-    # Disable buttons immediately to avoid double-click
-    await query.edit_message_reply_markup(reply_markup=None)
+    await query.edit_message_text("📥 Downloading...")
+    filename = download_video(url, format_id)
 
-    # Ensure per-user locking
-    if chat_id not in user_locks:
-        user_locks[chat_id] = Lock()
+    if not filename:
+        await query.message.reply_text("❌ Download failed.")
+        return
 
-    async with user_locks[chat_id]:
-        try:
-            user_data = user_video_data.get(chat_id)
-            if not user_data:
-                await query.edit_message_text("⚠️ Session expired. Please send the link again.")
-                return
+    with open(filename, "rb") as f:
+        await query.message.reply_video(video=f)
 
-            video_format = user_data['formats'].get(itag)
-            url = user_data['url']
+    os.remove(filename)
 
-            ydl_opts = {
-                'quiet': True,
-                'format': itag,
-                'outtmpl': 'downloaded_video.%(ext)s'
-            }
-
-            # Show progress message
-            await query.edit_message_text("⬇️ Downloading, please wait...")
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-
-            file_path = "downloaded_video.mp4"
-            file_size = os.path.getsize(file_path)
-
-            if file_size > 50 * 1024 * 1024:
-                await query.edit_message_text("⚠️ File is large, sending as document...")
-            else:
-                await query.edit_message_text("📤 Uploading...")
-
-            with open(file_path, 'rb') as f:
-                await context.bot.send_document(chat_id=chat_id, document=f, filename="video.mp4")
-
-            await query.edit_message_text("✅ Video sent!")
-            os.remove(file_path)
-
-        except Exception as e:
-            print("Download error:", e)
-            await query.edit_message_text(f"❌ Error during download: {str(e)}")
-
-# 🔧 Global error handler
-async def error_handler(update, context):
-    print("❗ GLOBAL ERROR:", context.error)
-
-# 🔧 Initialize bot
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, get_video_options))
-app.add_handler(CallbackQueryHandler(button_handler))
-app.add_error_handler(error_handler)
-
-
+# Run the bot
 def run_bot():
-    print("🤖 Bot is running...")
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
     app.run_polling()
