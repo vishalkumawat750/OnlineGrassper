@@ -1,44 +1,55 @@
 import os
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler,
     ContextTypes, filters
 )
 from yt_dlp import YoutubeDL
-import logging
 
-BOT_TOKEN = "6007538473:AAGPWq9MJMwMtt7csnLpJgmDOq99rTDvBZE"
+# Replace with your actual bot token
+BOT_TOKEN = os.getenv("BOT_TOKEN", "6007538473:AAGPWq9MJMwMtt7csnLpJgmDOq99rTDvBZE")
 
-logging.basicConfig(level=logging.INFO)
+# Logging setup
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# Get available video formats
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# Get video format options
 def get_video_options(url):
     try:
-        ydl_opts = {}
+        ydl_opts = {
+            "quiet": True,
+        }
+
         if os.path.exists("cookies.txt"):
-            ydl_opts['cookies'] = "cookies.txt"
+            logging.info("✅ Using cookies.txt")
+            ydl_opts["cookies"] = "cookies.txt"
 
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             formats = info.get("formats", [])
             options = [
-                (f"{f['format_note']} - {f['ext']}", f['format_id'])
-                for f in formats if f.get("vcodec") != "none" and f.get("acodec") != "none"
+                (f"{f['format_note']} - {f['ext']} ({round(f['filesize'] / 1024 / 1024, 1)}MB)" if f.get("filesize") else f"{f['format_note']} - {f['ext']}", f["format_id"])
+                for f in formats
+                if f.get("vcodec") != "none" and f.get("acodec") != "none"
             ]
             return options
     except Exception as e:
         logging.error(f"Error in get_video_options: {e}")
         return None
 
-# Download video
+# Download video in selected quality
 def download_video(url, format_id):
     ydl_opts = {
         "format": format_id,
-        "outtmpl": "downloads/%(title)s.%(ext)s"
+        "outtmpl": os.path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s"),
+        "quiet": True,
     }
 
     if os.path.exists("cookies.txt"):
-        ydl_opts['cookies'] = "cookies.txt"
+        ydl_opts["cookies"] = "cookies.txt"
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -48,17 +59,19 @@ def download_video(url, format_id):
         logging.error(f"Download error: {e}")
         return None
 
-# Handlers
+# Start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📥 Send me a YouTube link to download.")
 
+# Handle messages with YouTube links
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     context.user_data["video_url"] = url
+    await update.message.reply_text("🔍 Getting video info...")
 
     options = get_video_options(url)
     if not options:
-        await update.message.reply_text("❌ Couldn't get video info.")
+        await update.message.reply_text("❌ Couldn't retrieve video options. It might be restricted or blocked.")
         return
 
     buttons = [
@@ -66,21 +79,23 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for label, format_id in options[:10]
     ]
     markup = InlineKeyboardMarkup(buttons)
-    await update.message.reply_text("Choose quality:", reply_markup=markup)
+    await update.message.reply_text("🎥 Choose video quality:", reply_markup=markup)
 
+# Handle quality button click
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
     format_id = query.data
     url = context.user_data.get("video_url")
+    await query.edit_message_text("📥 Downloading... Please wait.")
 
-    await query.edit_message_text("📥 Downloading...")
     filename = download_video(url, format_id)
-
-    if not filename:
+    if not filename or not os.path.exists(filename):
         await query.message.reply_text("❌ Download failed.")
         return
 
+    # Send video
     with open(filename, "rb") as f:
         await query.message.reply_video(video=f)
 
