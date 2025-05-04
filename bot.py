@@ -6,8 +6,11 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters
 )
 from asyncio import Lock
+from telegram.ext import ApplicationBuilder
 
 BOT_TOKEN = '6007538473:AAGPWq9MJMwMtt7csnLpJgmDOq99rTDvBZE'  # 🔁 Replace with your actual bot token
+
+app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 user_video_data = {}
 user_locks = {}  # Lock per user
@@ -117,5 +120,7 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, get_video_option
 app.add_handler(CallbackQueryHandler(button_handler))
 app.add_error_handler(error_handler)
 
-print("🤖 Bot is running...")
-app.run_polling()
+
+def run_bot():
+    print("🤖 Bot is running...")
+    app.run_polling()
