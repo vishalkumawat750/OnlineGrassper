@@ -7,9 +7,8 @@ from telegram.ext import (
 )
 from yt_dlp import YoutubeDL
 
-# Bot and Webhook config
-BOT_TOKEN = os.getenv("BOT_TOKEN", "6007538473:AAGPWq9MJMwMtt7csnLpJgmDOq99rTDvBZE").rstrip('/')
-BOT_URL = os.getenv("BOT_URL", "https://onlinegrassper.onrender.com").rstrip('/')  # Replace with your actual URL
+# Replace with your actual bot token
+BOT_TOKEN = os.getenv("BOT_TOKEN", "6007538473:AAGPWq9MJMwMtt7csnLpJgmDOq99rTDvBZE")
 
 # Logging setup
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -17,9 +16,13 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+# Get video format options
 def get_video_options(url):
     try:
-        ydl_opts = {"quiet": True}
+        ydl_opts = {
+            "quiet": True,
+        }
+
         if os.path.exists("cookies.txt"):
             logging.info("✅ Using cookies.txt")
             ydl_opts["cookies"] = "cookies.txt"
@@ -37,12 +40,14 @@ def get_video_options(url):
         logging.error(f"Error in get_video_options: {e}")
         return None
 
+# Download video in selected quality
 def download_video(url, format_id):
     ydl_opts = {
         "format": format_id,
         "outtmpl": os.path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s"),
         "quiet": True,
     }
+
     if os.path.exists("cookies.txt"):
         ydl_opts["cookies"] = "cookies.txt"
 
@@ -54,10 +59,11 @@ def download_video(url, format_id):
         logging.error(f"Download error: {e}")
         return None
 
-# Command Handlers
+# Start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📥 Send me a YouTube link to download.")
 
+# Handle messages with YouTube links
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     context.user_data["video_url"] = url
@@ -75,6 +81,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     markup = InlineKeyboardMarkup(buttons)
     await update.message.reply_text("🎥 Choose video quality:", reply_markup=markup)
 
+# Handle quality button click
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -83,46 +90,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = context.user_data.get("video_url")
     await query.edit_message_text("📥 Downloading... Please wait.")
 
-    filename = download_video(url, format_id)
-    if not filename or not os.path.exists(filename):
-        await query.message.reply_text("❌ Download failed.")
-        return
+    try:
+        filename = download_video(url, format_id)
+        if not filename or not os.path.exists(filename):
+            await query.message.reply_text("❌ Download failed.")
+            return
 
-    with open(filename, "rb") as f:
-        await query.message.reply_video(video=f)
+        # Send video
+        with open(filename, "rb") as f:
+            await query.message.reply_video(video=f)
 
-    os.remove(filename)
+        os.remove(filename)
+    except Exception as e:
+        logging.error(f"Error during callback handling: {e}")
+        await query.message.reply_text("❌ An error occurred while processing your request.")
 
-# Entry point for webhook-based bot
-def run_bot_webhook():
-    from flask import Flask, request
-    from telegram import Update
-
-    app = Flask(__name__)
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(handle_callback))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
-
-    @app.route('/')
-    def home():
-        return '🚀 Bot is running with webhook.'
-
-    @app.route('/webhook', methods=['POST'])
-    def webhook():
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        application.update_queue.put(update)
-        return "ok", 200
-
-    # Start Flask + Telegram webhook listener
-    import threading
-    threading.Thread(target=lambda: application.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 8080)),
-        webhook_url=f"{BOT_URL}/webhook"
-    )).start()
-
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-
+# Run the bot
+def run_bot():
+    try:
+        app = ApplicationBuilder().token(BOT_TOKEN).build()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CallbackQueryHandler(handle_callback))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+        app.run_polling()
+    except Exception as e:
+        logging.error(f"Error in bot execution: {e}")
