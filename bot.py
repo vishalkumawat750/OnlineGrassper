@@ -23,7 +23,7 @@ async def get_video_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     try:
-        ydl_opts = {'quiet': True, 'skip_download': True}
+        ydl_opts = {'outtmpl': 'downloads/%(title)s.%(ext)s', 'cookies': 'cookies.txt','quiet': True, 'skip_download': True}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
