@@ -7,7 +7,7 @@ from telegram.ext import (
 from yt_dlp import YoutubeDL
 import logging
 
-BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+BOT_TOKEN = "6007538473:AAGPWq9MJMwMtt7csnLpJgmDOq99rTDvBZE"
 
 logging.basicConfig(level=logging.INFO)
 
